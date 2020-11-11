@@ -1,0 +1,11 @@
+[package]
+name = "awsck"
+version = "0.1.0"
+authors = ["alan"]
+edition = "2018"
+
+
+[dependencies]
+rusoto_core = "0.45"
+rusoto_ec2 = "0.45"
+tokio = { version = "0.2", features = ["full"] }
