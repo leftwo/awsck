@@ -2,6 +2,7 @@ extern crate rusoto_core;
 extern crate rusoto_ec2;
 extern crate tokio;
 
+use chrono::DateTime;
 use rusoto_core::Region;
 use rusoto_ec2::{DescribeInstancesRequest, Ec2, Ec2Client};
 
@@ -42,6 +43,7 @@ fn instance_to_struct(x: &rusoto_ec2::Instance, all_instances: &mut Vec<Instance
             }
         }
     }
+
     let mut inst_az: String = "".to_string();
     if x.placement.is_some() {
         inst_az = x
@@ -73,6 +75,19 @@ fn instance_to_struct(x: &rusoto_ec2::Instance, all_instances: &mut Vec<Instance
             }
         }
     }
+    // Get the time string from AWS, reformat it to our desired format
+    let time = x.launch_time.clone().unwrap_or_default();
+    let lt_str = match DateTime::parse_from_rfc3339(&time) {
+        Ok(t) => t.format("%a %b %e %T %Y").to_string(),
+        Err(e) => {
+            println!(
+                "Error finding start time for instance {}:\n{}",
+                inst_name, e
+            );
+            "???".to_string()
+        }
+    };
+
     let ai: Instance = Instance {
         name: inst_name,
         instance_id: x.instance_id.clone().unwrap_or_default(),
@@ -83,7 +98,7 @@ fn instance_to_struct(x: &rusoto_ec2::Instance, all_instances: &mut Vec<Instance
         subnet: x.subnet_id.clone().unwrap_or_default(),
         key_name: x.key_name.clone().unwrap_or_default(),
         state: inst_state,
-        launch_time: x.launch_time.clone().unwrap_or_default(),
+        launch_time: lt_str,
         vpc: x.vpc_id.clone().unwrap_or_default(),
         isl: inst_state_letter,
         spot,
@@ -91,6 +106,29 @@ fn instance_to_struct(x: &rusoto_ec2::Instance, all_instances: &mut Vec<Instance
     all_instances.push(ai);
     name_max
 }
+
+fn display_instances(all_instances: &mut Vec<Instance>, max: usize) {
+    // Header first
+    print!("{0:>1$}", "Name".to_string(), max);
+    print!(" {0:1}", " ".to_string());
+    print!(" {0:1}", " ".to_string());
+    print!(" {0:>24}", "Launch Time".to_string());
+    print!(" {0:>11}", "Type".to_string());
+    print!(" {0:>15}", "Public IP".to_string());
+    println!(" {0:>10}", "Avil-zone".to_string());
+
+    for y in all_instances.iter() {
+        print!("{0:>1$}", y.name, max);
+        print!(" {0:1}", y.isl);
+        print!(" {0:1}", y.spot);
+        print!(" {0:>24}", y.launch_time);
+        print!(" {0:>11}", y.inst_type);
+        print!(" {0:>15}", y.pub_ip);
+        print!(" {0:>10}", y.az);
+        println!();
+    }
+}
+
 async fn find_instances(region: Region, all_instances: &mut Vec<Instance>) -> usize {
     let ec2_client = Ec2Client::new(region);
     let describe_instances_request = DescribeInstancesRequest::default();
@@ -107,7 +145,6 @@ async fn find_instances(region: Region, all_instances: &mut Vec<Instance>) -> us
     };
 
     let mut name_max = 0;
-    // println!("{:#?}", all.reservations);
     if let Some(reservations) = all.reservations {
         for res in reservations {
             let inst = match res.instances {
@@ -132,31 +169,115 @@ async fn find_instances(region: Region, all_instances: &mut Vec<Instance>) -> us
 #[tokio::main]
 async fn main() {
     let mut all_instances: Vec<Instance> = Vec::with_capacity(4);
+    let regions: [Region; 4] = [Region::UsEast1, Region::UsEast2, Region::UsWest1, Region::UsWest2];
+    let mut max: usize = 0;
 
-    let mut max = 0;
-    // This will be redone as a loop, I promise!
-    /*
-    let name_max: usize = find_instances(Region::UsEast1, &mut all_instances).await;
-    if name_len > max { max = name_len };
-    */
-    let name_len: usize = find_instances(Region::UsEast2, &mut all_instances).await;
-    if name_len > max {
-        max = name_len
-    };
-    /*
-    let name_len: usize = find_instances(Region::UsWest1, &mut all_instances).await;
-    if name_len > max { max = name_len };
-    let name_len: usize = find_instances(Region::UsWest2, &mut all_instances).await;
-    if name_len > max { max = name_len };
-    */
-    while let Some(y) = all_instances.pop() {
-        print!("{0:>1$}", y.name, max);
-        print!(" {0:1}", y.isl);
-        print!(" {0:1}", y.spot);
-        print!(" {}", y.launch_time);
-        print!(" {0:>11}", y.inst_type);
-        print!(" {0:>15}", y.pub_ip);
-        print!(" {0:>10}", y.az);
-        println!();
+    for r in regions.iter() {
+        let name_len: usize = find_instances(r.clone(), &mut all_instances).await;
+        if name_len > max {
+            max = name_len;
+        }
+    }
+    display_instances(&mut all_instances, max);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn basic() {
+        // Test of struct filled with sane values.
+        // We don't actually test all of these, but some I'm keeping
+        // around in the event I decide to.
+
+        // TODO: add network interface struct
+        let mut all_instances: Vec<Instance> = Vec::with_capacity(1);
+
+        let mut p: rusoto_ec2::Placement = rusoto_ec2::Placement::default();
+        p.availability_zone = Some("us-east-2a".to_string());
+        p.group_name = Some("".to_string());
+        p.tenancy = Some("default".to_string());
+
+        let mut test_x: rusoto_ec2::Instance = rusoto_ec2::Instance::default();
+        test_x.ami_launch_index = Some(0);
+        test_x.client_token = Some("".to_string());
+        test_x.ebs_optimized = Some(true);
+        test_x.image_id = Some("ami-0c03383ab60707ed9".to_string());
+        test_x.instance_id = Some("i-0c6fc50204fc67f25".to_string());
+        test_x.instance_type = Some("t3.small".to_string());
+        test_x.key_name = Some("SSHKeyName".to_string());
+        test_x.launch_time = Some("2038-01-19T03:14:08.000Z".to_string());
+        test_x.placement = Some(p);
+        test_x.private_dns_name = Some("ip-172-31-11-214.us-east-2.compute.internal".to_string());
+        test_x.private_ip_address = Some("127.0.0.1".to_string());
+        test_x.public_dns_name = Some("".to_string());
+        test_x.root_device_name = Some("/dev/dssd".to_string());
+        test_x.root_device_type = Some("ebs".to_string());
+        test_x.source_dest_check = Some(true);
+        test_x.state = Some(rusoto_ec2::InstanceState {
+            code: Some(80),
+            name: Some("stopped".to_string()),
+        });
+        test_x.state_transition_reason =
+            Some("User initiated (1971-07-15 10:47:26 GMT)".to_string());
+        test_x.subnet_id = Some("subnet-923ffbfb".to_string());
+        test_x.tags = Some(vec![rusoto_ec2::Tag {
+            key: Some("Name".to_string()),
+            value: Some("longlength".to_string()),
+        }]);
+        test_x.virtualization_type = Some("hvm".to_string());
+        test_x.vpc_id = Some("vpc-e6eb188f".to_string());
+
+        let max = instance_to_struct(&test_x, &mut all_instances);
+        assert_eq!(max, 10);
+        assert_eq!(1, all_instances.len());
+
+        let max = instance_to_struct(&test_x, &mut all_instances);
+        assert_eq!(max, 10);
+
+        assert_eq!(2, all_instances.len());
+        for y in all_instances.iter() {
+            assert_eq!("longlength".to_string(), y.name);
+            assert_eq!("S".to_string(), y.isl);
+            assert_eq!("Tue Jan 19 03:14:08 2038".to_string(), y.launch_time);
+            assert_eq!("t3.small".to_string(), y.inst_type);
+            assert_eq!("us-east-2a".to_string(), y.az);
+        }
+    }
+
+    #[test]
+    fn empty() {
+        let mut all_instances: Vec<Instance> = Vec::with_capacity(3);
+        let test_empty: rusoto_ec2::Instance = rusoto_ec2::Instance::default();
+        let max = instance_to_struct(&test_empty, &mut all_instances);
+        assert_eq!(max, 0);
+        assert_eq!(1, all_instances.len());
+    }
+    #[test]
+    fn placement() {
+        let mut all_instances: Vec<Instance> = Vec::with_capacity(3);
+        let p: rusoto_ec2::Placement = rusoto_ec2::Placement::default();
+        let mut test_placement: rusoto_ec2::Instance = rusoto_ec2::Instance::default();
+        test_placement.placement = Some(p);
+        let max = instance_to_struct(&test_placement, &mut all_instances);
+        assert_eq!(max, 0);
+        assert_eq!(1, all_instances.len());
+    }
+    #[test]
+    fn name() {
+        let mut all_instances: Vec<Instance> = Vec::with_capacity(3);
+        let mut test_name: rusoto_ec2::Instance = rusoto_ec2::Instance::default();
+        test_name.tags = Some(vec![rusoto_ec2::Tag {
+            key: Some("Name".to_string()),
+            value: Some("name".to_string()),
+        }]);
+
+        let max = instance_to_struct(&test_name, &mut all_instances);
+        assert_eq!(max, 4);
+        assert_eq!(1, all_instances.len());
+        for y in all_instances.iter() {
+            assert_eq!("name".to_string(), y.name);
+        }
     }
 }
