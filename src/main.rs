@@ -2,7 +2,7 @@ extern crate rusoto_core;
 extern crate rusoto_ec2;
 extern crate tokio;
 
-use chrono::DateTime;
+use chrono::{DateTime, NaiveDateTime};
 use rusoto_core::Region;
 use rusoto_ec2::{DescribeInstancesRequest, Ec2, Ec2Client};
 
@@ -17,7 +17,7 @@ pub struct Instance {
     subnet: String,
     key_name: String,
     state: String,
-    launch_time: String,
+    launch_time_sec: i64,
     vpc: String,
     isl: String,
     spot: String,
@@ -75,16 +75,19 @@ fn instance_to_struct(x: &rusoto_ec2::Instance, all_instances: &mut Vec<Instance
             }
         }
     }
-    // Get the time string from AWS, reformat it to our desired format
+
+    // Get the time string from AWS, reformat it to seconds
+    // I'm using seconds here, because it's easier to sort by
+    // an i64 than a string.
     let time = x.launch_time.clone().unwrap_or_default();
-    let lt_str = match DateTime::parse_from_rfc3339(&time) {
-        Ok(t) => t.format("%a %b %e %T %Y").to_string(),
+    let lt_seconds = match DateTime::parse_from_rfc3339(&time) {
+        Ok(t) => t.timestamp(),
         Err(e) => {
             println!(
                 "Error finding start time for instance {}:\n{}",
                 inst_name, e
             );
-            "???".to_string()
+            0
         }
     };
 
@@ -98,7 +101,7 @@ fn instance_to_struct(x: &rusoto_ec2::Instance, all_instances: &mut Vec<Instance
         subnet: x.subnet_id.clone().unwrap_or_default(),
         key_name: x.key_name.clone().unwrap_or_default(),
         state: inst_state,
-        launch_time: lt_str,
+        launch_time_sec: lt_seconds,
         vpc: x.vpc_id.clone().unwrap_or_default(),
         isl: inst_state_letter,
         spot,
@@ -112,19 +115,23 @@ fn display_instances(all_instances: &mut Vec<Instance>, max: usize) {
     print!("{0:>1$}", "Name".to_string(), max);
     print!(" {0:1}", " ".to_string());
     print!(" {0:1}", " ".to_string());
-    print!(" {0:>24}", "Launch Time".to_string());
+    print!(" {0:>13}", "Launch Time".to_string());
     print!(" {0:>11}", "Type".to_string());
     print!(" {0:>15}", "Public IP".to_string());
-    println!(" {0:>10}", "Avil-zone".to_string());
+    print!(" {0:>10}", "Avil-zone".to_string());
+    // Putting VPC at 12 lines up with the smaller VPC ID length.
+    println!(" {0:>12}", "VPC".to_string());
 
     for y in all_instances.iter() {
         print!("{0:>1$}", y.name, max);
         print!(" {0:1}", y.isl);
         print!(" {0:1}", y.spot);
-        print!(" {0:>24}", y.launch_time);
+        let lt_str = NaiveDateTime::from_timestamp(y.launch_time_sec, 0);
+        print!(" {0:>13}", lt_str.format("%y/%m/%d %H:%M").to_string());
         print!(" {0:>11}", y.inst_type);
         print!(" {0:>15}", y.pub_ip);
         print!(" {0:>10}", y.az);
+        print!(" {0:<21}", y.vpc);
         println!();
     }
 }
@@ -207,7 +214,7 @@ mod tests {
         test_x.instance_id = Some("i-0c6fc50204fc67f25".to_string());
         test_x.instance_type = Some("t3.small".to_string());
         test_x.key_name = Some("SSHKeyName".to_string());
-        test_x.launch_time = Some("2038-01-19T03:14:08.000Z".to_string());
+        test_x.launch_time = Some("2038-01-19T03:07:08.000Z".to_string());
         test_x.placement = Some(p);
         test_x.private_dns_name = Some("ip-172-31-11-214.us-east-2.compute.internal".to_string());
         test_x.private_ip_address = Some("127.0.0.1".to_string());
@@ -240,7 +247,7 @@ mod tests {
         for y in all_instances.iter() {
             assert_eq!("longlength".to_string(), y.name);
             assert_eq!("S".to_string(), y.isl);
-            assert_eq!("Tue Jan 19 03:14:08 2038".to_string(), y.launch_time);
+            assert_eq!(2147483228, y.launch_time_sec);
             assert_eq!("t3.small".to_string(), y.inst_type);
             assert_eq!("us-east-2a".to_string(), y.az);
         }
