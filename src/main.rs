@@ -5,6 +5,7 @@ extern crate tokio;
 use chrono::{DateTime, NaiveDateTime};
 use rusoto_core::Region;
 use rusoto_ec2::{DescribeInstancesRequest, Ec2, Ec2Client};
+use clap::{Arg, App};
 
 #[derive(Debug)]
 pub struct Instance {
@@ -110,7 +111,7 @@ fn instance_to_struct(x: &rusoto_ec2::Instance, all_instances: &mut Vec<Instance
     name_max
 }
 
-fn display_instances(all_instances: &mut Vec<Instance>, max: usize) {
+fn display_instances_full(all_instances: &mut Vec<Instance>, max: usize) {
     // Header first
     print!("{0:>1$}", "Name".to_string(), max);
     print!(" {0:1}", " ".to_string());
@@ -127,11 +128,37 @@ fn display_instances(all_instances: &mut Vec<Instance>, max: usize) {
         print!(" {0:1}", y.isl);
         print!(" {0:1}", y.spot);
         let lt_str = NaiveDateTime::from_timestamp(y.launch_time_sec, 0);
-        print!(" {0:>13}", lt_str.format("%y/%m/%d %H:%M").to_string());
+        print!(" {0:>13}", lt_str.format("%m/%d/%y %H:%M").to_string());
         print!(" {0:>11}", y.inst_type);
         print!(" {0:>15}", y.pub_ip);
         print!(" {0:>10}", y.az);
         print!(" {0:<21}", y.vpc);
+        println!();
+    }
+}
+
+fn display_instances(all_instances: &mut Vec<Instance>, max: usize) {
+    // Header first
+    print!("{0:>1$}", "Name".to_string(), max);
+    print!(" {0:1}", " ".to_string());
+    print!(" {0:1}", " ".to_string());
+    print!(" {0:>8}", "Launched".to_string());
+    print!(" {0:>11}", "Type".to_string());
+    print!(" {0:>15}", "Public IP".to_string());
+    println!(" {0:>10}", "Avil-zone".to_string());
+
+    for y in all_instances.iter() {
+        if y.isl != "R" {
+            continue;
+        }
+        print!("{0:>1$}", y.name, max);
+        print!(" {0:1}", y.isl);
+        print!(" {0:1}", y.spot);
+        let lt_str = NaiveDateTime::from_timestamp(y.launch_time_sec, 0);
+        print!(" {0:>8}", lt_str.format("%m/%d/%y").to_string());
+        print!(" {0:>11}", y.inst_type);
+        print!(" {0:>15}", y.pub_ip);
+        print!(" {0:>10}", y.az);
         println!();
     }
 }
@@ -179,13 +206,26 @@ async fn main() {
     let regions: [Region; 4] = [Region::UsEast1, Region::UsEast2, Region::UsWest1, Region::UsWest2];
     let mut max: usize = 0;
 
+    let matches = App::new("AWS ec2 display")
+                          .version("1.0")
+                          .arg(Arg::with_name("a")
+                               .short("a")
+                               .multiple(false)
+                               .help("Show more instance info"))
+                          .get_matches();
+
     for r in regions.iter() {
         let name_len: usize = find_instances(r.clone(), &mut all_instances).await;
         if name_len > max {
             max = name_len;
         }
     }
-    display_instances(&mut all_instances, max);
+    if matches.is_present("a") {
+        display_instances_full(&mut all_instances, max);
+    }
+    else {
+        display_instances(&mut all_instances, max);
+    }
 }
 
 #[cfg(test)]
